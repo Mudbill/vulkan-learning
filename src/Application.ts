@@ -210,7 +210,8 @@ import {
   VK_SUCCESS,
   VulkanWindow,
 } from "nvk/generated/1.1.126/linux";
-import fs from "fs";
+import { clamp } from "./math";
+import { readBinaryFile } from "./util";
 
 const enableValidationLayers = Boolean(
   parseInt(process.env.ENABLE_VALIDATION_LAYERS || "")
@@ -231,17 +232,6 @@ class SwapChainSupportDetails {
   public capabilities = new VkSurfaceCapabilitiesKHR();
   public formats: VkSurfaceFormatKHR[] = [];
   public presentModes: Int32Array = new Int32Array();
-}
-
-function clamp(value: number, min: number, max: number) {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
-}
-
-function readFile(filename: string) {
-  const file = fs.readFileSync(filename);
-  return new Uint8Array(file);
 }
 
 export default class Application {
@@ -865,8 +855,8 @@ export default class Application {
   }
 
   createGraphicsPipeline() {
-    const vertShaderCode = readFile("./bin/shaders/vert.spv");
-    const fragShaderCode = readFile("./bin/shaders/frag.spv");
+    const vertShaderCode = readBinaryFile("./bin/shaders/vert.spv");
+    const fragShaderCode = readBinaryFile("./bin/shaders/frag.spv");
 
     const vertShaderModule = this.createShaderModule(vertShaderCode);
     const fragShaderModule = this.createShaderModule(fragShaderCode);

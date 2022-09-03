@@ -8,6 +8,7 @@ const win = new VulkanWindow({
   title: "Hello Vulkan",
   width: WIDTH,
   height: HEIGHT,
+  resizable: false,
 });
 
 const app = new Application(win);

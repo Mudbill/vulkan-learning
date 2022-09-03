@@ -1,7 +1,6 @@
 import {
   vkAcquireNextImageKHR,
   vkAllocateCommandBuffers,
-  VkAllocationCallbacks,
   VkApplicationInfo,
   VkAttachmentDescription,
   VkAttachmentReference,
@@ -69,7 +68,6 @@ import {
   VkFramebuffer,
   VkFramebufferCreateInfo,
   vkGetDeviceQueue,
-  vkGetInstanceProcAddr,
   vkGetPhysicalDeviceFeatures,
   vkGetPhysicalDeviceProperties,
   vkGetPhysicalDeviceQueueFamilyProperties,
@@ -104,7 +102,6 @@ import {
   VkPipelineVertexInputStateCreateInfo,
   VkPipelineViewportStateCreateInfo,
   VkPresentInfoKHR,
-  VkPresentModeKHR,
   VkQueue,
   VkQueueFamilyProperties,
   vkQueuePresentKHR,
@@ -141,6 +138,7 @@ import {
   VK_COLOR_COMPONENT_A_BIT,
   VK_COLOR_COMPONENT_B_BIT,
   VK_COLOR_COMPONENT_G_BIT,
+  VK_COLOR_COMPONENT_R_BIT,
   VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
   VK_COMMAND_BUFFER_LEVEL_PRIMARY,
   VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -155,8 +153,6 @@ import {
   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT,
   VK_DYNAMIC_STATE_SCISSOR,
   VK_DYNAMIC_STATE_VIEWPORT,
-  VK_ERROR_EXTENSION_NOT_PRESENT,
-  VK_FALSE,
   VK_FENCE_CREATE_SIGNALED_BIT,
   VK_FORMAT_B8G8R8A8_SRGB,
   VK_FRONT_FACE_CLOCKWISE,
@@ -212,7 +208,6 @@ import {
   VK_SUBPASS_CONTENTS_INLINE,
   VK_SUBPASS_EXTERNAL,
   VK_SUCCESS,
-  VK_TRUE,
   VulkanWindow,
 } from "nvk/generated/1.1.126/linux";
 import fs from "fs";
@@ -249,53 +244,22 @@ function readFile(filename: string) {
   return new Uint8Array(file);
 }
 
-// function CreateDebugUtilsMessengerEXT(
-//   instance: VkInstance,
-//   pCreateInfo: VkDebugUtilsMessengerCreateInfoEXT,
-//   pAllocator: VkAllocationCallbacks | null,
-//   pDebugMessenger: VkDebugUtilsMessengerEXT
-// ) {
-//   const func = vkGetInstanceProcAddr(
-//     instance,
-//     "vkCreateDebugUtilsMessengerEXT"
-//   ) as unknown as typeof vkCreateDebugUtilsMessengerEXT;
-//   if (func !== null) {
-//     func(instance, pCreateInfo, null, pDebugMessenger);
-//   } else {
-//     return VK_ERROR_EXTENSION_NOT_PRESENT;
-//   }
-// }
-
-// function DestroyDebugUtilsMessengerEXT(
-//   instance: VkInstance,
-//   debugMessenger: VkDebugUtilsMessengerEXT,
-//   pAllocator: VkAllocationCallbacks | null
-// ) {
-//   const func = vkGetInstanceProcAddr(
-//     instance,
-//     "vkDestroyDebugUtilsMessengerEXT"
-//   ) as unknown as typeof vkDestroyDebugUtilsMessengerEXT;
-//   if (func !== null) {
-//     func(instance, debugMessenger, null);
-//   }
-// }
-
 export default class Application {
-  // static debugCallback(
-  //   messageSeverity: VkDebugUtilsMessageSeverityFlagBitsEXT,
-  //   messageType: VkDebugUtilsMessageTypeFlagBitsEXT,
-  //   pCallbackData: VkDebugUtilsMessengerCallbackDataEXT | null,
-  //   pUserData: null
-  // ) {
-  //   console.error("Validation layer:", pCallbackData?.pMessage);
-  //   return false;
-  // }
+  static debugCallback(
+    messageSeverity: VkDebugUtilsMessageSeverityFlagBitsEXT,
+    messageType: VkDebugUtilsMessageTypeFlagBitsEXT,
+    pCallbackData: VkDebugUtilsMessengerCallbackDataEXT | null,
+    pUserData: null
+  ) {
+    console.error("Validation layer:", pCallbackData?.pMessage);
+    return false;
+  }
 
   private win: VulkanWindow;
   private instance = new VkInstance();
   private validationLayers = ["VK_LAYER_KHRONOS_validation"];
   private deviceExtensions = ["VK_KHR_swapchain"];
-  // private debugMessenger = new VkDebugUtilsMessengerEXT();
+  private debugMessenger = new VkDebugUtilsMessengerEXT();
   private surface = new VkSurfaceKHR();
   private physicalDevice?: VkPhysicalDevice;
   private device = new VkDevice();
@@ -328,10 +292,10 @@ export default class Application {
 
   init() {
     this.createInstance();
-    // this.setupDebugMessenger();
     this.createSurface();
     this.pickPhysicalDevice();
     this.createLogicalDevice();
+    this.setupDebugMessenger();
     this.createSwapChain();
     this.createImageViews();
     this.createRenderPass();
@@ -351,9 +315,9 @@ export default class Application {
   }
 
   cleanup() {
-    // if (enableValidationLayers) {
-    //   DestroyDebugUtilsMessengerEXT(this.instance, this.debugMessenger, null);
-    // }
+    if (enableValidationLayers) {
+      vkDestroyDebugUtilsMessengerEXT(this.instance, this.debugMessenger, null);
+    }
     vkDestroySemaphore(this.device, this.imageAvailableSemaphore, null);
     vkDestroySemaphore(this.device, this.renderFinishedSemaphore, null);
     vkDestroyFence(this.device, this.inFlightFence, null);
@@ -392,6 +356,7 @@ export default class Application {
     const createInfo = new VkInstanceCreateInfo();
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = appInfo;
+
     if (enableValidationLayers) {
       createInfo.enabledLayerCount = this.validationLayers.length;
       createInfo.ppEnabledLayerNames = this.validationLayers;
@@ -451,32 +416,37 @@ export default class Application {
     return true;
   }
 
-  // setupDebugMessenger() {
-  //   if (!enableValidationLayers) return;
-  //   const createInfo = new VkDebugUtilsMessengerCreateInfoEXT();
-  //   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-  //   createInfo.messageSeverity =
-  //     VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-  //     VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-  //     VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-  //   createInfo.messageType =
-  //     VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-  //     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-  //     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-  //   createInfo.pfnUserCallback = Application.debugCallback;
-  //   createInfo.pUserData = null;
+  populateDebugMessengerCreateInfo() {
+    const createInfo = new VkDebugUtilsMessengerCreateInfoEXT();
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity =
+      VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+      VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+      VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType =
+      VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = Application.debugCallback;
+    createInfo.pUserData = null;
+    return createInfo;
+  }
 
-  //   if (
-  //     CreateDebugUtilsMessengerEXT(
-  //       this.instance,
-  //       createInfo,
-  //       null,
-  //       this.debugMessenger
-  //     ) !== VK_SUCCESS
-  //   ) {
-  //     throw new Error("Failed to set up debug messenger");
-  //   }
-  // }
+  setupDebugMessenger() {
+    if (!enableValidationLayers) return;
+    const createInfo = this.populateDebugMessengerCreateInfo();
+
+    if (
+      vkCreateDebugUtilsMessengerEXT(
+        this.instance,
+        createInfo,
+        null,
+        this.debugMessenger
+      ) !== VK_SUCCESS
+    ) {
+      throw new Error("Failed to set up debug messenger");
+    }
+  }
 
   pickPhysicalDevice() {
     const deviceCount: VkInout = { $: 0 };
@@ -986,7 +956,7 @@ export default class Application {
 
     const colorBlendAttachments = new VkPipelineColorBlendAttachmentState();
     colorBlendAttachments.colorWriteMask =
-      VK_COLOR_COMPONENT_G_BIT |
+      VK_COLOR_COMPONENT_R_BIT |
       VK_COLOR_COMPONENT_G_BIT |
       VK_COLOR_COMPONENT_B_BIT |
       VK_COLOR_COMPONENT_A_BIT;

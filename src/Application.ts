@@ -1,14 +1,19 @@
 import {
   vkAcquireNextImageKHR,
   vkAllocateCommandBuffers,
+  vkAllocateMemory,
   VkApplicationInfo,
   VkAttachmentDescription,
   VkAttachmentReference,
   vkBeginCommandBuffer,
+  vkBindBufferMemory,
+  VkBuffer,
+  VkBufferCreateInfo,
   VkClearColorValue,
   VkClearValue,
   vkCmdBeginRenderPass,
   vkCmdBindPipeline,
+  vkCmdBindVertexBuffers,
   vkCmdDraw,
   vkCmdEndRenderPass,
   vkCmdSetScissor,
@@ -19,6 +24,7 @@ import {
   VkCommandPool,
   VkCommandPoolCreateInfo,
   VkComponentMapping,
+  vkCreateBuffer,
   vkCreateCommandPool,
   vkCreateDebugUtilsMessengerEXT,
   vkCreateDevice,
@@ -37,6 +43,7 @@ import {
   VkDebugUtilsMessengerCallbackDataEXT,
   VkDebugUtilsMessengerCreateInfoEXT,
   VkDebugUtilsMessengerEXT,
+  vkDestroyBuffer,
   vkDestroyCommandPool,
   vkDestroyDebugUtilsMessengerEXT,
   vkDestroyDevice,
@@ -53,6 +60,7 @@ import {
   vkDestroySwapchainKHR,
   VkDevice,
   VkDeviceCreateInfo,
+  VkDeviceMemory,
   VkDeviceQueueCreateInfo,
   vkDeviceWaitIdle,
   vkEndCommandBuffer,
@@ -67,8 +75,11 @@ import {
   VkFormat,
   VkFramebuffer,
   VkFramebufferCreateInfo,
+  vkFreeMemory,
+  vkGetBufferMemoryRequirements,
   vkGetDeviceQueue,
   vkGetPhysicalDeviceFeatures,
+  vkGetPhysicalDeviceMemoryProperties,
   vkGetPhysicalDeviceProperties,
   vkGetPhysicalDeviceQueueFamilyProperties,
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
@@ -82,12 +93,18 @@ import {
   VkImageView,
   VkImageViewCreateInfo,
   VkInout,
+  VkInoutAddress,
   VkInstance,
   VkInstanceCreateInfo,
   VkLayerProperties,
+  vkMapMemory,
+  VkMemoryAllocateInfo,
+  VkMemoryPropertyFlagBits,
+  VkMemoryRequirements,
   VkOffset2D,
   VkPhysicalDevice,
   VkPhysicalDeviceFeatures,
+  VkPhysicalDeviceMemoryProperties,
   VkPhysicalDeviceProperties,
   VkPipeline,
   VkPipelineColorBlendAttachmentState,
@@ -124,6 +141,7 @@ import {
   VkSurfaceKHR,
   VkSwapchainCreateInfoKHR,
   VkSwapchainKHR,
+  vkUnmapMemory,
   VkViewport,
   vkWaitForFences,
   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -135,6 +153,7 @@ import {
   VK_BLEND_FACTOR_ONE,
   VK_BLEND_FACTOR_ZERO,
   VK_BLEND_OP_ADD,
+  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
   VK_COLOR_COMPONENT_A_BIT,
   VK_COLOR_COMPONENT_B_BIT,
   VK_COLOR_COMPONENT_G_BIT,
@@ -153,6 +172,7 @@ import {
   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT,
   VK_DYNAMIC_STATE_SCISSOR,
   VK_DYNAMIC_STATE_VIEWPORT,
+  VK_ERROR_OUT_OF_DATE_KHR,
   VK_FENCE_CREATE_SIGNALED_BIT,
   VK_FORMAT_B8G8R8A8_SRGB,
   VK_FRONT_FACE_CLOCKWISE,
@@ -164,6 +184,8 @@ import {
   VK_IMAGE_VIEW_TYPE_2D,
   VK_LOGIC_OP_COPY,
   VK_MAKE_VERSION,
+  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
   VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
   VK_PIPELINE_BIND_POINT_GRAPHICS,
   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -178,6 +200,7 @@ import {
   VK_SHARING_MODE_CONCURRENT,
   VK_SHARING_MODE_EXCLUSIVE,
   VK_STRUCTURE_TYPE_APPLICATION_INFO,
+  VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
   VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
   VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
   VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -189,6 +212,7 @@ import {
   VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
   VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
   VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+  VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
   VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
   VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
   VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -205,13 +229,16 @@ import {
   VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
   VK_STRUCTURE_TYPE_SUBMIT_INFO,
   VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+  VK_SUBOPTIMAL_KHR,
   VK_SUBPASS_CONTENTS_INLINE,
   VK_SUBPASS_EXTERNAL,
   VK_SUCCESS,
   VulkanWindow,
 } from "nvk/generated/1.1.126/linux";
 import { clamp } from "./math";
-import { readBinaryFile } from "./util";
+import { readBinaryFile, Vertex, rawVertices, memcpy } from "./util";
+
+const MAX_FRAMES_IN_FLIGHT = 2;
 
 const enableValidationLayers = Boolean(
   parseInt(process.env.ENABLE_VALIDATION_LAYERS || "")
@@ -251,7 +278,7 @@ export default class Application {
   private deviceExtensions = ["VK_KHR_swapchain"];
   private debugMessenger = new VkDebugUtilsMessengerEXT();
   private surface = new VkSurfaceKHR();
-  private physicalDevice?: VkPhysicalDevice;
+  private physicalDevice = new VkPhysicalDevice();
   private device = new VkDevice();
   private graphicsQueue = new VkQueue();
   private presentQueue = new VkQueue();
@@ -265,10 +292,15 @@ export default class Application {
   private graphicsPipeline = new VkPipeline();
   private swapChainFramebuffers: VkFramebuffer[] = [];
   private commandPool = new VkCommandPool();
-  private commandBuffer = new VkCommandBuffer();
-  private imageAvailableSemaphore = new VkSemaphore();
-  private renderFinishedSemaphore = new VkSemaphore();
-  private inFlightFence = new VkFence();
+  private vertexBuffer = new VkBuffer();
+  private vertexBufferMemory = new VkDeviceMemory();
+  private commandBuffers: VkCommandBuffer[] = [];
+  private imageAvailableSemaphores: VkSemaphore[] = [];
+  private renderFinishedSemaphores: VkSemaphore[] = [];
+  private inFlightFences: VkFence[] = [];
+  private currentFrame = 0;
+  private framebufferResized = false;
+  private shuttingDown = false;
 
   constructor(win: VulkanWindow) {
     this.win = win;
@@ -292,39 +324,47 @@ export default class Application {
     this.createGraphicsPipeline();
     this.createFramebuffers();
     this.createCommandPool();
-    this.createCommandBuffer();
+    this.createVertexBuffer();
+    this.createCommandBuffers();
     this.createSyncObjects();
+    this.win.onresize = () => (this.framebufferResized = true);
+    this.win.onclose = () => (this.shuttingDown = true);
   }
 
   update() {
     while (!this.win.shouldClose()) {
       this.win.pollEvents();
-      this.drawFrame();
+      if (!this.shuttingDown) this.drawFrame();
     }
-    vkDeviceWaitIdle(this.device);
   }
 
   cleanup() {
+    vkDeviceWaitIdle(this.device);
+    this.cleanupSwapChain();
+
+    vkDestroyBuffer(this.device, this.vertexBuffer, null);
+    vkFreeMemory(this.device, this.vertexBufferMemory, null);
+    vkDestroyPipeline(this.device, this.graphicsPipeline, null);
+    vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
+
+    vkDestroyRenderPass(this.device, this.renderPass, null);
+
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      vkDestroySemaphore(this.device, this.imageAvailableSemaphores[i], null);
+      vkDestroySemaphore(this.device, this.renderFinishedSemaphores[i], null);
+      vkDestroyFence(this.device, this.inFlightFences[i], null);
+    }
+
+    vkDestroyCommandPool(this.device, this.commandPool, null);
+
     if (enableValidationLayers) {
       vkDestroyDebugUtilsMessengerEXT(this.instance, this.debugMessenger, null);
     }
-    vkDestroySemaphore(this.device, this.imageAvailableSemaphore, null);
-    vkDestroySemaphore(this.device, this.renderFinishedSemaphore, null);
-    vkDestroyFence(this.device, this.inFlightFence, null);
-    vkDestroyCommandPool(this.device, this.commandPool, null);
-    vkDestroyPipeline(this.device, this.graphicsPipeline, null);
-    vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
-    for (const framebuffer of this.swapChainFramebuffers) {
-      vkDestroyFramebuffer(this.device, framebuffer, null);
-    }
-    vkDestroyRenderPass(this.device, this.renderPass, null);
-    for (const imageView of this.swapChainImageViews) {
-      vkDestroyImageView(this.device, imageView, null);
-    }
-    vkDestroySwapchainKHR(this.device, this.swapChain, null);
+
     vkDestroySurfaceKHR(this.instance, this.surface, null);
     vkDestroyDevice(this.device, null);
     vkDestroyInstance(this.instance, null);
+
     this.win.close();
   }
 
@@ -449,10 +489,11 @@ export default class Application {
       .fill(null)
       .map(() => new VkPhysicalDevice());
     vkEnumeratePhysicalDevices(this.instance, deviceCount, devices);
-    this.physicalDevice = devices.find((d) => this.isDeviceSuitable(d));
-    if (!this.physicalDevice) {
+    const device = devices.find((d) => this.isDeviceSuitable(d));
+    if (!device) {
       throw new Error("Failed to find a suitable GPU");
     }
+    this.physicalDevice = device;
   }
 
   isDeviceSuitable(device: VkPhysicalDevice) {
@@ -598,7 +639,7 @@ export default class Application {
   }
 
   createLogicalDevice() {
-    const indices = this.findQueueFamilies(this.physicalDevice!);
+    const indices = this.findQueueFamilies(this.physicalDevice);
 
     const queueCreateInfos: VkDeviceQueueCreateInfo[] = [];
     const uniqueQueueFamilies = new Set([
@@ -635,7 +676,7 @@ export default class Application {
     }
 
     if (
-      vkCreateDevice(this.physicalDevice!, createInfo, null, this.device) !==
+      vkCreateDevice(this.physicalDevice, createInfo, null, this.device) !==
       VK_SUCCESS
     ) {
       throw new Error("Failed to create logical device");
@@ -660,11 +701,16 @@ export default class Application {
   }
 
   createSwapChain() {
-    const swapChainSupport = this.querySwapChainSupport(this.physicalDevice!);
+    const swapChainSupport = this.querySwapChainSupport(this.physicalDevice);
 
     const surfaceFormat = this.chooseSwapSurfaceFormat(
       swapChainSupport.formats
     );
+
+    if (!surfaceFormat) {
+      throw new Error("Failed to fetch surface format");
+    }
+
     const presentMode = this.chooseSwapPresentMode(
       swapChainSupport.presentModes
     );
@@ -682,13 +728,13 @@ export default class Application {
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     createInfo.surface = this.surface;
     createInfo.minImageCount = imageCount;
-    createInfo.imageFormat = surfaceFormat.format;
-    createInfo.imageColorSpace = surfaceFormat.colorSpace;
+    createInfo.imageFormat = surfaceFormat?.format;
+    createInfo.imageColorSpace = surfaceFormat?.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    const indices = this.findQueueFamilies(this.physicalDevice!);
+    const indices = this.findQueueFamilies(this.physicalDevice);
     if (indices.graphicsFamily !== indices.presentFamily) {
       createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
       createInfo.queueFamilyIndexCount = 2;
@@ -726,11 +772,12 @@ export default class Application {
       imageCount2,
       this.swapChainImages
     );
-    this.swapChainImageFormat = surfaceFormat.format;
+    this.swapChainImageFormat = surfaceFormat?.format;
     this.swapChainExtent = extent;
   }
 
   chooseSwapSurfaceFormat(availableFormats: VkSurfaceFormatKHR[]) {
+    if (!availableFormats.length) return null;
     for (const availableFormat of availableFormats) {
       if (
         availableFormat.format === VK_FORMAT_B8G8R8A8_SRGB &&
@@ -877,13 +924,17 @@ export default class Application {
 
     const shaderStages = [vertShaderStageInfo, fragShaderStageInfo];
 
+    const bindingDescription = Vertex.getBindingDescription();
+    const attributeDescriptions = Vertex.getAttributeDescription();
+
     const vertexInputInfo = new VkPipelineVertexInputStateCreateInfo();
     vertexInputInfo.sType =
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = null;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = null;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = [bindingDescription];
+    vertexInputInfo.vertexAttributeDescriptionCount =
+      attributeDescriptions.length;
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions;
 
     const inputAssembly = new VkPipelineInputAssemblyStateCreateInfo();
     inputAssembly.sType =
@@ -1065,7 +1116,7 @@ export default class Application {
   }
 
   createCommandPool() {
-    const queueFamilyIndices = this.findQueueFamilies(this.physicalDevice!);
+    const queueFamilyIndices = this.findQueueFamilies(this.physicalDevice);
 
     const poolInfo = new VkCommandPoolCreateInfo();
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1080,15 +1131,19 @@ export default class Application {
     }
   }
 
-  createCommandBuffer() {
+  createCommandBuffers() {
+    this.commandBuffers = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkCommandBuffer());
+
     const allocInfo = new VkCommandBufferAllocateInfo();
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = this.commandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
+    allocInfo.commandBufferCount = this.commandBuffers.length;
 
     if (
-      vkAllocateCommandBuffers(this.device, allocInfo, [this.commandBuffer]) !==
+      vkAllocateCommandBuffers(this.device, allocInfo, this.commandBuffers) !==
       VK_SUCCESS
     ) {
       throw new Error("Failed to allocate command buffers");
@@ -1096,6 +1151,16 @@ export default class Application {
   }
 
   createSyncObjects() {
+    this.imageAvailableSemaphores = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkSemaphore());
+    this.renderFinishedSemaphores = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkSemaphore());
+    this.inFlightFences = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkFence());
+
     const semaphoreInfo = new VkSemaphoreCreateInfo();
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -1103,23 +1168,25 @@ export default class Application {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    if (
-      vkCreateSemaphore(
-        this.device,
-        semaphoreInfo,
-        null,
-        this.imageAvailableSemaphore
-      ) !== VK_SUCCESS ||
-      vkCreateSemaphore(
-        this.device,
-        semaphoreInfo,
-        null,
-        this.renderFinishedSemaphore
-      ) !== VK_SUCCESS ||
-      vkCreateFence(this.device, fenceInfo, null, this.inFlightFence) !==
-        VK_SUCCESS
-    ) {
-      throw new Error("Failed to create semaphores");
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      if (
+        vkCreateSemaphore(
+          this.device,
+          semaphoreInfo,
+          null,
+          this.imageAvailableSemaphores[i]
+        ) !== VK_SUCCESS ||
+        vkCreateSemaphore(
+          this.device,
+          semaphoreInfo,
+          null,
+          this.renderFinishedSemaphores[i]
+        ) !== VK_SUCCESS ||
+        vkCreateFence(this.device, fenceInfo, null, this.inFlightFences[i]) !==
+          VK_SUCCESS
+      ) {
+        throw new Error("Failed to create semaphores");
+      }
     }
   }
 
@@ -1162,6 +1229,15 @@ export default class Application {
       this.graphicsPipeline
     );
 
+    const offsets = new BigUint64Array([0n]);
+    vkCmdBindVertexBuffers(
+      commandBuffer,
+      0,
+      1,
+      [this.vertexBuffer],
+      offsets as any
+    );
+
     const viewport = new VkViewport();
     viewport.x = 0.0;
     viewport.y = 0.0;
@@ -1176,7 +1252,7 @@ export default class Application {
     scissor.extent = this.swapChainExtent;
     vkCmdSetScissor(commandBuffer, 0, 1, [scissor]);
 
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0); // TODO: change 3 to number of vertices
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1189,29 +1265,40 @@ export default class Application {
     vkWaitForFences(
       this.device,
       1,
-      [this.inFlightFence],
+      [this.inFlightFences[this.currentFrame]],
       true,
       Number.MAX_VALUE
     );
-    vkResetFences(this.device, 1, [this.inFlightFence]);
 
     const imageIndex: VkInout = { $: 0 };
-    vkAcquireNextImageKHR(
+    let result = vkAcquireNextImageKHR(
       this.device,
       this.swapChain,
       Number.MAX_VALUE,
-      this.imageAvailableSemaphore,
+      this.imageAvailableSemaphores[this.currentFrame],
       null,
       imageIndex
     );
 
-    vkResetCommandBuffer(this.commandBuffer, 0);
-    this.recordCommandBuffer(this.commandBuffer, Number(imageIndex.$));
+    if (result === VK_ERROR_OUT_OF_DATE_KHR) {
+      this.recreateSwapChain();
+      return;
+    } else if (result !== VK_SUCCESS && result !== VK_SUBOPTIMAL_KHR) {
+      throw new Error("Failed to acquire swapchain image");
+    }
+
+    vkResetFences(this.device, 1, [this.inFlightFences[this.currentFrame]]);
+
+    vkResetCommandBuffer(this.commandBuffers[this.currentFrame], 0);
+    this.recordCommandBuffer(
+      this.commandBuffers[this.currentFrame],
+      Number(imageIndex.$)
+    );
 
     const submitInfo = new VkSubmitInfo();
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    const waitSemaphores = [this.imageAvailableSemaphore];
+    const waitSemaphores = [this.imageAvailableSemaphores[this.currentFrame]];
     const waitStages = new Int32Array([
       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
     ]);
@@ -1219,15 +1306,19 @@ export default class Application {
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = [this.commandBuffer];
+    submitInfo.pCommandBuffers = [this.commandBuffers[this.currentFrame]];
 
-    const signalSemaphores = [this.renderFinishedSemaphore];
+    const signalSemaphores = [this.renderFinishedSemaphores[this.currentFrame]];
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
     if (
-      vkQueueSubmit(this.graphicsQueue, 1, [submitInfo], this.inFlightFence) !==
-      VK_SUCCESS
+      vkQueueSubmit(
+        this.graphicsQueue,
+        1,
+        [submitInfo],
+        this.inFlightFences[this.currentFrame]
+      ) !== VK_SUCCESS
     ) {
       throw new Error("Failed to submit draw command buffer");
     }
@@ -1242,6 +1333,121 @@ export default class Application {
     presentInfo.pImageIndices = new Uint32Array([Number(imageIndex.$)]);
     presentInfo.pResults = null;
 
-    vkQueuePresentKHR(this.presentQueue, presentInfo);
+    result = vkQueuePresentKHR(this.presentQueue, presentInfo);
+
+    if (
+      result === VK_ERROR_OUT_OF_DATE_KHR ||
+      result === VK_SUBOPTIMAL_KHR ||
+      this.framebufferResized
+    ) {
+      this.framebufferResized = false;
+      this.recreateSwapChain();
+    } else if (result !== VK_SUCCESS) {
+      throw new Error("Failed to present swapchain image");
+    }
+
+    this.currentFrame = (this.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+  }
+
+  cleanupSwapChain() {
+    for (const framebuffer of this.swapChainFramebuffers) {
+      vkDestroyFramebuffer(this.device, framebuffer, null);
+    }
+    for (const imageView of this.swapChainImageViews) {
+      vkDestroyImageView(this.device, imageView, null);
+    }
+    vkDestroySwapchainKHR(this.device, this.swapChain, null);
+  }
+
+  recreateSwapChain() {
+    vkDeviceWaitIdle(this.device);
+
+    this.cleanupSwapChain();
+
+    this.createSwapChain();
+    this.createImageViews();
+    this.createFramebuffers();
+  }
+
+  createVertexBuffer() {
+    const bufferInfo = new VkBufferCreateInfo();
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = 4 * rawVertices.length;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (
+      vkCreateBuffer(this.device, bufferInfo, null, this.vertexBuffer) !==
+      VK_SUCCESS
+    ) {
+      throw new Error("Failed to create vertex buffer");
+    }
+
+    const memRequirements = new VkMemoryRequirements();
+    vkGetBufferMemoryRequirements(
+      this.device,
+      this.vertexBuffer,
+      memRequirements
+    );
+
+    const allocInfo = new VkMemoryAllocateInfo();
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = this.findMemoryType(
+      memRequirements.memoryTypeBits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    if (
+      vkAllocateMemory(
+        this.device,
+        allocInfo,
+        null,
+        this.vertexBufferMemory
+      ) !== VK_SUCCESS
+    ) {
+      throw new Error("Failed to allocate vertex buffer memory");
+    }
+
+    vkBindBufferMemory(
+      this.device,
+      this.vertexBuffer,
+      this.vertexBufferMemory,
+      0
+    );
+
+    const data: VkInoutAddress = { $: 0n };
+    if (
+      vkMapMemory(
+        this.device,
+        this.vertexBufferMemory,
+        0,
+        bufferInfo.size,
+        0,
+        data
+      ) !== VK_SUCCESS
+    ) {
+      throw new Error("Failed to map memory");
+    }
+
+    memcpy(data.$, rawVertices, rawVertices.byteLength);
+    vkUnmapMemory(this.device, this.vertexBufferMemory);
+  }
+
+  findMemoryType(typeFilter: number, properties: VkMemoryPropertyFlagBits) {
+    const memProperties = new VkPhysicalDeviceMemoryProperties();
+    vkGetPhysicalDeviceMemoryProperties(this.physicalDevice, memProperties);
+
+    for (let i = 0; i < memProperties.memoryTypeCount; ++i) {
+      if (!memProperties.memoryTypes) continue;
+      if (
+        typeFilter & (1 << i) &&
+        (memProperties.memoryTypes[i].propertyFlags & properties) === properties
+      ) {
+        return i;
+      }
+    }
+
+    throw new Error("Failed to find suitable memory type");
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "node-vulkan",
   "version": "1.0.0",
-  "main": "src/index.ts",
+  "main": "bin/app/index.js",
   "author": "Magnus Bull",
   "license": "MIT",
   "private": true,
@@ -9,11 +9,11 @@
     "@types/node": "^18.7.13",
     "gl-matrix": "^3.4.3",
     "nvk": "^0.8.0",
-    "ts-node": "^10.9.1",
     "typescript": "^4.8.2"
   },
   "scripts": {
-    "compile-shaders": "./compile-shaders.sh",
-    "start": "yarn run compile-shaders && ENABLE_VALIDATION_LAYERS=1 ts-node ."
+    "compile": "./compile-shaders.sh && tsc --outDir bin/app",
+    "start": "yarn run compile && ENABLE_VALIDATION_LAYERS=1 node .",
+    "launch": "node ."
   }
 }

@@ -12,8 +12,8 @@ export function readBinaryFile(filename: string) {
   return new Uint8Array(file);
 }
 
-export function memcpy(dstPtr: BigInt, srcData: Float32Array, byteLen: number) {
-  const dstBuffer = (ArrayBuffer as any).fromAddress(dstPtr, byteLen); // Why doesn't fromArray exist on the type?
+export function memcpy(dstPtr: bigint, srcData: Float32Array, byteLen: number) {
+  const dstBuffer = ArrayBuffer.fromAddress(dstPtr, byteLen);
   const srcBuffer = srcData.buffer;
   const dstView = new Uint8Array(dstBuffer);
   const srcView = new Uint8Array(srcBuffer);

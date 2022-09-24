@@ -1,11 +1,4 @@
 import fs from "fs";
-import {
-  VkVertexInputAttributeDescription,
-  VkVertexInputBindingDescription,
-  VK_FORMAT_R32G32B32_SFLOAT,
-  VK_FORMAT_R32G32_SFLOAT,
-  VK_VERTEX_INPUT_RATE_VERTEX,
-} from "nvk/generated/1.1.126/linux";
 
 export function readBinaryFile(filename: string) {
   const file = fs.readFileSync(filename);
@@ -67,18 +60,3 @@ export class Vertex {
 export const rawVertices = new Float32Array([
   0, -0.5, 1, 0, 0, 0.5, 0.5, 0, 1, 0, -0.5, 0.5, 0, 0, 1,
 ]);
-
-// const vertices: Array<[[number, number], [number, number, number]]> = [
-//   [
-//     [0, 0.5],
-//     [1, 0, 0],
-//   ],
-//   [
-//     [0.5, 0.5],
-//     [0, 1, 0],
-//   ],
-//   [
-//     [-0.5, 0.5],
-//     [0, 0, 1],
-//   ],
-// ];

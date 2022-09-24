@@ -2,8 +2,7 @@ import { clamp } from "./math";
 import { readBinaryFile, Vertex, rawVertices, memcpy } from "./util";
 
 const MAX_FRAMES_IN_FLIGHT = 2;
-
-const enableValidationLayers = Boolean(
+const ENABLE_VALIDATION_LAYERS = Boolean(
   parseInt(process.env.ENABLE_VALIDATION_LAYERS || "")
 );
 
@@ -24,7 +23,7 @@ class SwapChainSupportDetails {
   public presentModes: Int32Array = new Int32Array();
 }
 
-export default class Application {
+export default class VulkanEngine {
   static debugCallback(
     messageSeverity: VkDebugUtilsMessageSeverityFlagBitsEXT,
     messageType: VkDebugUtilsMessageTypeFlagBitsEXT,
@@ -120,7 +119,7 @@ export default class Application {
 
     vkDestroyCommandPool(this.device, this.commandPool, null);
 
-    if (enableValidationLayers) {
+    if (ENABLE_VALIDATION_LAYERS) {
       vkDestroyDebugUtilsMessengerEXT(this.instance, this.debugMessenger, null);
     }
 
@@ -132,7 +131,7 @@ export default class Application {
   }
 
   createInstance() {
-    if (enableValidationLayers && !this.checkValidationLayerSupport()) {
+    if (ENABLE_VALIDATION_LAYERS && !this.checkValidationLayerSupport()) {
       throw new Error(
         "Validation layers requested, but not available. Are Vulkan dev tools installed?"
       );
@@ -150,7 +149,7 @@ export default class Application {
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = appInfo;
 
-    if (enableValidationLayers) {
+    if (ENABLE_VALIDATION_LAYERS) {
       createInfo.enabledLayerCount = this.validationLayers.length;
       createInfo.ppEnabledLayerNames = this.validationLayers;
     } else {
@@ -169,7 +168,7 @@ export default class Application {
 
   getRequiredExtensions() {
     const extensions = this.win.getRequiredInstanceExtensions();
-    if (enableValidationLayers) {
+    if (ENABLE_VALIDATION_LAYERS) {
       extensions.push("VK_EXT_debug_utils");
     }
     return extensions;
@@ -220,13 +219,13 @@ export default class Application {
       VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    createInfo.pfnUserCallback = Application.debugCallback;
+    createInfo.pfnUserCallback = VulkanEngine.debugCallback;
     createInfo.pUserData = null;
     return createInfo;
   }
 
   setupDebugMessenger() {
-    if (!enableValidationLayers) return;
+    if (!ENABLE_VALIDATION_LAYERS) return;
     const createInfo = this.populateDebugMessengerCreateInfo();
 
     if (
@@ -431,7 +430,7 @@ export default class Application {
     createInfo.enabledExtensionCount = this.deviceExtensions.length;
     createInfo.ppEnabledExtensionNames = this.deviceExtensions;
 
-    if (enableValidationLayers) {
+    if (ENABLE_VALIDATION_LAYERS) {
       createInfo.enabledLayerCount = this.validationLayers.length;
       createInfo.ppEnabledLayerNames = this.validationLayers;
     } else {

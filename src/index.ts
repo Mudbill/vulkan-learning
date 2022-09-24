@@ -1,16 +1,13 @@
 import * as nvk from "nvk/generated/1.1.126/linux";
-import Application from "./Application";
+import VulkanEngine from "./VulkanEngine";
 
 Object.assign(globalThis, nvk);
 
-const WIDTH = 800;
-const HEIGHT = 600;
-
 const win = new VulkanWindow({
   title: "Hello Vulkan",
-  width: WIDTH,
-  height: HEIGHT,
+  width: 800,
+  height: 600,
 });
 
-const app = new Application(win);
+const app = new VulkanEngine(win);
 app.run();

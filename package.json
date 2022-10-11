@@ -12,7 +12,7 @@
     "typescript": "^4.8.2"
   },
   "scripts": {
-    "compile": "./compile-shaders.sh && tsc --outDir bin/app",
+    "compile": "./compile-shaders.sh && tsc",
     "start": "yarn run compile && ENABLE_VALIDATION_LAYERS=1 node .",
     "launch": "node ."
   }

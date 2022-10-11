@@ -1,10 +1,20 @@
+import { glMatrix, mat4, vec3 } from "gl-matrix";
 import { clamp } from "./math";
-import { readBinaryFile, Vertex, rawVertices, memcpy } from "./util";
+import {
+  readBinaryFile,
+  Vertex,
+  rawVertices,
+  memcpy,
+  rawIndicies,
+  UniformBufferObject,
+} from "./util";
+import { performance } from "perf_hooks";
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 const ENABLE_VALIDATION_LAYERS = Boolean(
   parseInt(process.env.ENABLE_VALIDATION_LAYERS || "")
 );
+const START_TIME = performance.now();
 
 class QueueFamilyIndices {
   public graphicsFamily?: number;
@@ -50,12 +60,19 @@ export default class VulkanEngine {
   private swapChainExtent: VkExtent2D | null = null;
   private swapChainImageViews: VkImageView[] = [];
   private renderPass = new VkRenderPass();
+  private descriptorSetLayout = new VkDescriptorSetLayout();
   private pipelineLayout = new VkPipelineLayout();
   private graphicsPipeline = new VkPipeline();
   private swapChainFramebuffers: VkFramebuffer[] = [];
   private commandPool = new VkCommandPool();
   private vertexBuffer = new VkBuffer();
   private vertexBufferMemory = new VkDeviceMemory();
+  private indexBuffer = new VkBuffer();
+  private indexBufferMemory = new VkDeviceMemory();
+  private uniformBuffers: VkBuffer[] = [];
+  private uniformBuffersMemory: VkDeviceMemory[] = [];
+  private descriptorPool = new VkDescriptorPool();
+  private descriptorSets: VkDescriptorSet[] = [];
   private commandBuffers: VkCommandBuffer[] = [];
   private imageAvailableSemaphores: VkSemaphore[] = [];
   private renderFinishedSemaphores: VkSemaphore[] = [];
@@ -83,10 +100,15 @@ export default class VulkanEngine {
     this.createSwapChain();
     this.createImageViews();
     this.createRenderPass();
+    this.createDescriptorSetLayout();
     this.createGraphicsPipeline();
     this.createFramebuffers();
     this.createCommandPool();
     this.createVertexBuffer();
+    this.createIndexBuffer();
+    this.createUniformBuffers();
+    this.createDescriptorPool();
+    this.createDescriptorSets();
     this.createCommandBuffers();
     this.createSyncObjects();
     this.win.onresize = () => (this.framebufferResized = true);
@@ -104,8 +126,20 @@ export default class VulkanEngine {
     vkDeviceWaitIdle(this.device);
     this.cleanupSwapChain();
 
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      vkDestroyBuffer(this.device, this.uniformBuffers[i], null);
+      vkFreeMemory(this.device, this.uniformBuffersMemory[i], null);
+    }
+
+    vkDestroyDescriptorPool(this.device, this.descriptorPool, null);
+    vkDestroyDescriptorSetLayout(this.device, this.descriptorSetLayout, null);
+
+    vkDestroyBuffer(this.device, this.indexBuffer, null);
+    vkFreeMemory(this.device, this.indexBufferMemory, null);
+
     vkDestroyBuffer(this.device, this.vertexBuffer, null);
     vkFreeMemory(this.device, this.vertexBufferMemory, null);
+
     vkDestroyPipeline(this.device, this.graphicsPipeline, null);
     vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
 
@@ -740,8 +774,8 @@ export default class VulkanEngine {
     rasterizer.rasterizerDiscardEnable = false;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = false;
     rasterizer.depthBiasConstantFactor = 0.0;
     rasterizer.depthBiasClamp = 0.0;
@@ -782,8 +816,8 @@ export default class VulkanEngine {
 
     const pipelineLayoutInfo = new VkPipelineLayoutCreateInfo();
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pSetLayouts = null;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = [this.descriptorSetLayout];
     pipelineLayoutInfo.pushConstantRangeCount = 0;
     pipelineLayoutInfo.pPushConstantRanges = null;
 
@@ -999,6 +1033,12 @@ export default class VulkanEngine {
       [this.vertexBuffer],
       offsets as any
     );
+    vkCmdBindIndexBuffer(
+      commandBuffer,
+      this.indexBuffer,
+      0,
+      VK_INDEX_TYPE_UINT16
+    );
 
     const viewport = new VkViewport();
     viewport.x = 0.0;
@@ -1014,7 +1054,18 @@ export default class VulkanEngine {
     scissor.extent = this.swapChainExtent;
     vkCmdSetScissor(commandBuffer, 0, 1, [scissor]);
 
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0); // TODO: change 3 to number of vertices
+    vkCmdBindDescriptorSets(
+      commandBuffer,
+      VK_PIPELINE_BIND_POINT_GRAPHICS,
+      this.pipelineLayout,
+      0,
+      1,
+      [this.descriptorSets[this.currentFrame]],
+      0,
+      null
+    );
+
+    vkCmdDrawIndexed(commandBuffer, rawIndicies.length, 1, 0, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1056,6 +1107,8 @@ export default class VulkanEngine {
       this.commandBuffers[this.currentFrame],
       Number(imageIndex.$)
     );
+
+    this.updateUniformBuffer(this.currentFrame);
 
     const submitInfo = new VkSubmitInfo();
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1132,68 +1185,145 @@ export default class VulkanEngine {
   }
 
   createVertexBuffer() {
+    const bufferSize = rawVertices.byteLength;
+
+    const stagingBuffer = new VkBuffer();
+    const stagingBufferMemory = new VkDeviceMemory();
+
+    this.createBuffer(
+      bufferSize,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory
+    );
+
+    const data: VkInoutAddress = { $: 0n };
+
+    vkMapMemory(this.device, stagingBufferMemory, 0, bufferSize, 0, data);
+    memcpy(data.$, rawVertices, bufferSize);
+    vkUnmapMemory(this.device, stagingBufferMemory);
+
+    this.createBuffer(
+      bufferSize,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      this.vertexBuffer,
+      this.vertexBufferMemory
+    );
+
+    this.copyBuffer(stagingBuffer, this.vertexBuffer, bufferSize);
+
+    vkDestroyBuffer(this.device, stagingBuffer, null);
+    vkFreeMemory(this.device, stagingBufferMemory, null);
+  }
+
+  copyBuffer(srcBuffer: VkBuffer, dstBuffer: VkBuffer, size: number) {
+    const allocInfo = new VkCommandBufferAllocateInfo();
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = this.commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    const commandBuffer = new VkCommandBuffer();
+    vkAllocateCommandBuffers(this.device, allocInfo, [commandBuffer]);
+
+    const beginInfo = new VkCommandBufferBeginInfo();
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, beginInfo);
+
+    const copyRegion = new VkBufferCopy();
+    copyRegion.srcOffset = 0;
+    copyRegion.dstOffset = 0;
+    copyRegion.size = size;
+    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, [copyRegion]);
+    vkEndCommandBuffer(commandBuffer);
+
+    const submitInfo = new VkSubmitInfo();
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = [commandBuffer];
+
+    vkQueueSubmit(this.graphicsQueue, 1, [submitInfo], null);
+    vkQueueWaitIdle(this.graphicsQueue);
+
+    vkFreeCommandBuffers(this.device, this.commandPool, 1, [commandBuffer]);
+  }
+
+  createIndexBuffer() {
+    const bufferSize = rawIndicies.byteLength;
+
+    const stagingBuffer = new VkBuffer();
+    const stagingBufferMemory = new VkDeviceMemory();
+
+    this.createBuffer(
+      bufferSize,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory
+    );
+
+    const data: VkInoutAddress = { $: 0n };
+
+    vkMapMemory(this.device, stagingBufferMemory, 0, bufferSize, 0, data);
+    memcpy(data.$, rawIndicies, bufferSize);
+    vkUnmapMemory(this.device, stagingBufferMemory);
+
+    this.createBuffer(
+      bufferSize,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      this.indexBuffer,
+      this.indexBufferMemory
+    );
+
+    this.copyBuffer(stagingBuffer, this.indexBuffer, bufferSize);
+
+    vkDestroyBuffer(this.device, stagingBuffer, null);
+    vkFreeMemory(this.device, stagingBufferMemory, null);
+  }
+
+  createBuffer(
+    size: number,
+    usage: number,
+    properties: VkMemoryPropertyFlagBits,
+    buffer: VkBuffer,
+    bufferMemory: VkDeviceMemory
+  ) {
     const bufferInfo = new VkBufferCreateInfo();
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = 4 * rawVertices.length;
-    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (
-      vkCreateBuffer(this.device, bufferInfo, null, this.vertexBuffer) !==
-      VK_SUCCESS
-    ) {
-      throw new Error("Failed to create vertex buffer");
+    if (vkCreateBuffer(this.device, bufferInfo, null, buffer) !== VK_SUCCESS) {
+      throw new Error("Failed to create buffer");
     }
 
     const memRequirements = new VkMemoryRequirements();
-    vkGetBufferMemoryRequirements(
-      this.device,
-      this.vertexBuffer,
-      memRequirements
-    );
+    vkGetBufferMemoryRequirements(this.device, buffer, memRequirements);
 
     const allocInfo = new VkMemoryAllocateInfo();
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = this.findMemoryType(
       memRequirements.memoryTypeBits,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+      properties
     );
 
     if (
-      vkAllocateMemory(
-        this.device,
-        allocInfo,
-        null,
-        this.vertexBufferMemory
-      ) !== VK_SUCCESS
+      vkAllocateMemory(this.device, allocInfo, null, bufferMemory) !==
+      VK_SUCCESS
     ) {
       throw new Error("Failed to allocate vertex buffer memory");
     }
 
-    vkBindBufferMemory(
-      this.device,
-      this.vertexBuffer,
-      this.vertexBufferMemory,
-      0
-    );
-
-    const data: VkInoutAddress = { $: 0n };
-    if (
-      vkMapMemory(
-        this.device,
-        this.vertexBufferMemory,
-        0,
-        bufferInfo.size,
-        0,
-        data
-      ) !== VK_SUCCESS
-    ) {
-      throw new Error("Failed to map memory");
-    }
-
-    memcpy(data.$, rawVertices, rawVertices.byteLength);
-    vkUnmapMemory(this.device, this.vertexBufferMemory);
+    vkBindBufferMemory(this.device, buffer, bufferMemory, 0);
   }
 
   findMemoryType(typeFilter: number, properties: VkMemoryPropertyFlagBits) {
@@ -1211,5 +1341,159 @@ export default class VulkanEngine {
     }
 
     throw new Error("Failed to find suitable memory type");
+  }
+
+  createDescriptorSetLayout() {
+    const uboLayoutBinding = new VkDescriptorSetLayoutBinding();
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = null;
+
+    const layoutInfo = new VkDescriptorSetLayoutCreateInfo();
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = [uboLayoutBinding];
+
+    if (
+      vkCreateDescriptorSetLayout(
+        this.device,
+        layoutInfo,
+        null,
+        this.descriptorSetLayout
+      ) !== VK_SUCCESS
+    ) {
+      throw new Error("Failed to create descriptor set layout");
+    }
+  }
+
+  createUniformBuffers() {
+    const bufferSize = UniformBufferObject.byteLength();
+
+    this.uniformBuffers = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkBuffer());
+    this.uniformBuffersMemory = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkDeviceMemory());
+
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      this.createBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        this.uniformBuffers[i],
+        this.uniformBuffersMemory[i]
+      );
+    }
+  }
+
+  updateUniformBuffer(currentImage: number) {
+    const now = performance.now();
+    const time = (now - START_TIME) / 1000;
+
+    const ubo = new UniformBufferObject();
+    mat4.rotate(
+      ubo.model,
+      mat4.create(),
+      time * glMatrix.toRadian(90),
+      vec3.fromValues(0, 0, 1)
+    );
+    mat4.lookAt(
+      ubo.view,
+      vec3.fromValues(2, 2, 2),
+      vec3.fromValues(0, 0, 0),
+      vec3.fromValues(0, 0, 1)
+    );
+    mat4.perspective(
+      ubo.proj,
+      glMatrix.toRadian(45),
+      this.swapChainExtent!.width / this.swapChainExtent!.height,
+      0.1,
+      10
+    );
+    ubo.proj[5] *= -1;
+
+    const buffer = UniformBufferObject.toFloatArray(ubo);
+
+    const data: VkInoutAddress = { $: 0n };
+    vkMapMemory(
+      this.device,
+      this.uniformBuffersMemory[currentImage],
+      0,
+      buffer.byteLength,
+      0,
+      data
+    );
+    memcpy(data.$, buffer, buffer.byteLength);
+    vkUnmapMemory(this.device, this.uniformBuffersMemory[currentImage]);
+  }
+
+  createDescriptorPool() {
+    const poolSize = new VkDescriptorPoolSize();
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+    const poolInfo = new VkDescriptorPoolCreateInfo();
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = [poolSize];
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolInfo.flags = 0;
+
+    if (
+      vkCreateDescriptorPool(
+        this.device,
+        poolInfo,
+        null,
+        this.descriptorPool
+      ) !== VK_SUCCESS
+    ) {
+      throw new Error("Failed to create descriptor pool");
+    }
+  }
+
+  createDescriptorSets() {
+    const layouts = new Array(MAX_FRAMES_IN_FLIGHT).fill(
+      this.descriptorSetLayout
+    );
+    const allocInfo = new VkDescriptorSetAllocateInfo();
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = this.descriptorPool;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = layouts;
+
+    this.descriptorSets = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(null)
+      .map(() => new VkDescriptorSet());
+
+    if (
+      vkAllocateDescriptorSets(this.device, allocInfo, this.descriptorSets) !==
+      VK_SUCCESS
+    ) {
+      throw new Error("Failed to allocated descriptor sets");
+    }
+
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      const bufferInfo = new VkDescriptorBufferInfo();
+      bufferInfo.buffer = this.uniformBuffers[i];
+      bufferInfo.offset = 0;
+      bufferInfo.range = VK_WHOLE_SIZE;
+
+      const descriptorWrite = new VkWriteDescriptorSet();
+      descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrite.dstSet = this.descriptorSets[i];
+      descriptorWrite.dstBinding = 0;
+      descriptorWrite.dstArrayElement = 0;
+      descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      descriptorWrite.descriptorCount = 1;
+      descriptorWrite.pBufferInfo = [bufferInfo];
+      descriptorWrite.pImageInfo = null;
+      descriptorWrite.pTexelBufferView = null;
+
+      vkUpdateDescriptorSets(this.device, 1, [descriptorWrite], 0, null);
+    }
   }
 }

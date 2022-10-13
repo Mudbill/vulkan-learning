@@ -13,7 +13,7 @@
   },
   "scripts": {
     "compile": "./compile-shaders.sh && tsc",
-    "start": "yarn run compile && ENABLE_VALIDATION_LAYERS=1 node .",
+    "start": "yarn run compile && ENABLE_VALIDATION_LAYERS=1 VSYNC=1 node .",
     "launch": "node ."
   }
 }

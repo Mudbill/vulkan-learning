@@ -11,10 +11,15 @@ import {
 import { performance } from "perf_hooks";
 
 const MAX_FRAMES_IN_FLIGHT = 2;
+const START_TIME = performance.now();
+
 const ENABLE_VALIDATION_LAYERS = Boolean(
   parseInt(process.env.ENABLE_VALIDATION_LAYERS || "")
 );
-const START_TIME = performance.now();
+const VSYNC = Boolean(parseInt(process.env.VSYNC || "1"));
+
+console.log("ENABLE_VALIDATION_LAYERS:", ENABLE_VALIDATION_LAYERS);
+console.log("VSYNC:", VSYNC);
 
 class QueueFamilyIndices {
   public graphicsFamily?: number;
@@ -115,9 +120,19 @@ export default class VulkanEngine {
     this.win.onclose = () => (this.shuttingDown = true);
   }
 
+  private frameCount = 0;
+  private previousSecond = performance.now();
+
   update() {
     while (!this.win.shouldClose()) {
       this.win.pollEvents();
+      this.frameCount++;
+      const now = performance.now();
+      if ((now - this.previousSecond) / 1000 > 1) {
+        this.win.title = `Hello Vulkan (${this.frameCount} fps)`;
+        this.frameCount = 0;
+        this.previousSecond = now;
+      }
       if (!this.shuttingDown) this.drawFrame();
     }
   }
@@ -587,6 +602,9 @@ export default class VulkanEngine {
 
   chooseSwapPresentMode(availablePresentModes: Int32Array) {
     for (const availablePresentMode of availablePresentModes) {
+      if (!VSYNC && availablePresentMode === VK_PRESENT_MODE_IMMEDIATE_KHR) {
+        return availablePresentMode;
+      }
       if (availablePresentMode === VK_PRESENT_MODE_MAILBOX_KHR) {
         return availablePresentMode;
       }
